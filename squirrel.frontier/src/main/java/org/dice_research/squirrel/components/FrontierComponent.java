@@ -35,7 +35,9 @@ import org.dice_research.squirrel.frontier.impl.FrontierSenderToWebservice;
 import org.dice_research.squirrel.frontier.impl.QueueBasedTerminationCheck;
 import org.dice_research.squirrel.frontier.impl.TerminationCheck;
 import org.dice_research.squirrel.frontier.impl.WorkerGuard;
+import org.dice_research.squirrel.predictor.Predictor;
 import org.dice_research.squirrel.queue.InMemoryQueue;
+import org.dice_research.squirrel.queue.IpAddressBasedQueue;
 import org.dice_research.squirrel.queue.UriQueue;
 import org.dice_research.squirrel.rabbit.RPCServer;
 import org.dice_research.squirrel.rabbit.RespondingDataHandler;
@@ -50,9 +52,11 @@ import org.hobbit.core.data.RabbitQueue;
 import org.hobbit.core.rabbit.DataReceiver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.dice_research.squirrel.predictor.PredictorImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
+
 
 @Component
 @Qualifier("frontierComponent")
@@ -77,9 +81,16 @@ public class FrontierComponent extends AbstractComponent implements RespondingDa
     private final WorkerGuard workerGuard = new WorkerGuard(this);
     private final boolean doRecrawling = true;
     private long recrawlingTime = 1000L * 60L * 60L * 24L * 30;
+
+
     private Timer timerTerminator;
 
+
     public static final boolean RECRAWLING_ACTIVE = true;
+    //
+     //protected Predictor pred = new PredictorImpl();
+     @Qualifier("predictorBean")
+     protected Predictor predictor;
 
     @Override
     public void init() throws Exception {
@@ -108,9 +119,11 @@ public class FrontierComponent extends AbstractComponent implements RespondingDa
             queue = new InMemoryQueue();
             knownUriFilter = new InMemoryKnownUriFilter(doRecrawling, recrawlingTime);
         }
-
+        // Training the URI predictor model with a training dataset
+        predictor = new PredictorImpl();
+        predictor.train("https://hobbitdata.informatik.uni-leipzig.de/squirrel/lodstats-seeds.csv");
         // Build frontier
-        frontier = new ExtendedFrontierImpl(new NormalizerImpl(), knownUriFilter, uriReferences, queue, doRecrawling);
+        frontier = new ExtendedFrontierImpl(new NormalizerImpl(), knownUriFilter, uriReferences, (IpAddressBasedQueue) queue, doRecrawling, predictor);
 
         rabbitQueue = this.incomingDataQueueFactory.createDefaultRabbitQueue(Constants.FRONTIER_QUEUE_NAME);
         receiver = (new RPCServer.Builder()).responseQueueFactory(outgoingDataQueuefactory).dataHandler(this)
@@ -139,6 +152,8 @@ public class FrontierComponent extends AbstractComponent implements RespondingDa
                     + webConfiguration.isVisualizationOfCrawledGraphEnabled()
                     + ". No WebServiceSenderThread will be started!");
         }
+
+
     }
 
     @Override
@@ -212,6 +227,7 @@ public class FrontierComponent extends AbstractComponent implements RespondingDa
             } else if (deserializedData instanceof CrawlingResult) {
                 CrawlingResult crawlingResult = (CrawlingResult) deserializedData;
                 LOGGER.warn("Received the message that the crawling for {} URIs is done.", crawlingResult.uris.size());
+
                 frontier.crawlingDone(crawlingResult.uris);
                 workerGuard.removeUrisForWorker(crawlingResult.idOfWorker, crawlingResult.uris);
             } else if (deserializedData instanceof AliveMessage) {

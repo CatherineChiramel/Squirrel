@@ -1,9 +1,13 @@
 package org.dice_research.squirrel.frontier.impl;
 
+
+import de.jungblut.math.DoubleVector;
+
 import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+
 
 import org.dice_research.squirrel.Constants;
 import org.dice_research.squirrel.data.uri.CrawleableUri;
@@ -18,8 +22,10 @@ import org.dice_research.squirrel.graph.GraphLogger;
 import org.dice_research.squirrel.queue.BlockingQueue;
 import org.dice_research.squirrel.queue.UriQueue;
 import org.dice_research.squirrel.uri.processing.UriProcessor;
+import org.dice_research.squirrel.components.FrontierComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.dice_research.squirrel.predictor.*;
 
 /**
  * Standard implementation of the {@link Frontier} interface containing a
@@ -97,6 +103,13 @@ public class FrontierImpl implements Frontier {
      */
     private static final long DEFAULT_TIMER_PERIOD = 1000 * 60 * 60;
 
+
+    /**
+     * Object for Predictor
+     */
+    protected Predictor predictor;
+
+
     /**
      * Constructor.
      *
@@ -150,23 +163,20 @@ public class FrontierImpl implements Frontier {
     /**
      * Constructor.
      *
-     * @param normalizer
-     *            {@link UriNormalizer} used to transform given URIs into a normal
-     *            form
-     * @param knownUriFilter
-     *            {@link UriFilter} used to identify URIs that already have been
-     *            crawled.
-     * @param uriReferences
-     *            {@link URIReferences} used to manage URI references
-     * @param queue
-     *            {@link UriQueue} used to manage the URIs that should be crawled.
-     * @param doesRecrawling
-     *            Value for {@link #doesRecrawling}.
+
+     * @param normalizer     {@link UriNormalizer} used to transform given URIs into a normal form
+     * @param knownUriFilter {@link UriFilter} used to identify URIs that already have been
+     *                       crawled.
+     * @param uriReferences  {@link URIReferences} used to manage URI references
+     * @param queue          {@link UriQueue} used to manage the URIs that should be
+     *                       crawled.
+     * @param doesRecrawling Value for {@link #doesRecrawling}.
+     * @param  predictor     object of PredictorImpl class used for prediction
      */
-    public FrontierImpl(UriNormalizer normalizer, KnownUriFilter knownUriFilter, URIReferences uriReferences,
-            UriQueue queue, boolean doesRecrawling) {
-        this(normalizer, knownUriFilter, uriReferences, queue, null, doesRecrawling, DEFAULT_GENERAL_RECRAWL_TIME,
-                DEFAULT_TIMER_PERIOD);
+    public FrontierImpl(UriNormalizer normalizer, KnownUriFilter knownUriFilter, URIReferences uriReferences, UriQueue queue, boolean doesRecrawling, Predictor predictor) {
+        this(normalizer, knownUriFilter, uriReferences, queue, null, doesRecrawling, DEFAULT_GENERAL_RECRAWL_TIME, DEFAULT_TIMER_PERIOD);
+        this.predictor = predictor;
+
     }
 
     /**
@@ -242,7 +252,6 @@ public class FrontierImpl implements Frontier {
         this.doesRecrawling = doesRecrawling;
         this.timerPeriod = timerPeriod;
         FrontierImpl.generalRecrawlTime = generalRecrawlTime;
-
         if (this.doesRecrawling) {
             timerRecrawling = new Timer();
             timerRecrawling.schedule(new TimerTask() {
@@ -276,8 +285,24 @@ public class FrontierImpl implements Frontier {
     public void addNewUri(CrawleableUri uri) {
         // Normalize the URI
         uri = normalizer.normalize(uri);
+        if(predictor != null) {
+            // Prediction of URI type
+            try {
+                //generate the feature vector of the uri for prediction purpose
+                predictor.featureHashing(uri);
+                //predict and update uri key with the
+                //
+                //predicted value
+                double p = predictor.predict(uri);
+                uri.addData(Constants.URI_PREDICTED_LABEL, p);
+            } catch (Exception e) {
+                LOGGER.info("Exception happened while predicting", e);
+            }
+        }
         // After knownUriFilter uri should be classified according to
         // UriProcessor
+
+
 
         if (knownUriFilter.isUriGood(uri)) {
             LOGGER.debug("addNewUri(" + uri + "): URI is good [" + knownUriFilter + "]");
@@ -311,20 +336,31 @@ public class FrontierImpl implements Frontier {
     public void crawlingDone(List<CrawleableUri> uris) {
         LOGGER.info("One worker finished his work and crawled " + uris.size() + " URIs.");
 
-        // List<CrawleableUri> newUris = new ArrayList<>(uriMap.size());
-        // for (CrawleableUri uri : uriMap.keySet()) {
-        // newUris.addAll(uriMap.get(uri));
-        // knownUriFilter.add(uri, System.currentTimeMillis(),
-        // uri.getTimestampNextCrawl());
-        // if (uriReferences != null) {
-        // uriReferences.add(uri, uriMap.get(uri));
-        // }
-        // }
 
-        // // If there is a graph logger, log the data
-        // if (graphLogger != null) {
-        // graphLogger.log(new ArrayList<>(uriMap.keySet()), newUris);
-        // }
+
+//        List<CrawleableUri> newUris = new ArrayList<>(uriMap.size());
+//        for (CrawleableUri uri : uriMap.keySet()) {
+//            newUris.addAll(uriMap.get(uri));
+//            knownUriFilter.add(uri, System.currentTimeMillis(), uri.getTimestampNextCrawl());
+//            if (uriReferences != null) {
+//                uriReferences.add(uri, uriMap.get(uri));
+//            }
+//        }
+
+//        // If there is a graph logger, log the data
+//        if (graphLogger != null) {
+//            graphLogger.log(new ArrayList<>(uriMap.keySet()), newUris);
+//        }
+        // Update the prediction model
+        try {
+            for (CrawleableUri uri : uris) {
+                predictor.weightUpdate(uri);
+            }
+
+        } catch (Exception e) {
+            LOGGER.info("Exception handles while updating weight",e);
+        }
+
         // If we should give the crawled IPs to the queue
         if (queue instanceof BlockingQueue) {
             ((BlockingQueue<?>) queue).markUrisAsAccessible(uris);
@@ -379,4 +415,6 @@ public class FrontierImpl implements Frontier {
         return queue;
     }
 
+
 }
+
